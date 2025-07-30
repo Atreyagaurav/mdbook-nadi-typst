@@ -1,0 +1,10 @@
+[package]
+name = "mdbook-typst"
+version = "0.1.0"
+edition = "2024"
+description = "A mdBook backend to output typst markup"
+
+[dependencies]
+mdbook = "0.4.52"
+pulldown-cmark = "0.13.0"
+serde = "1.0.219"
