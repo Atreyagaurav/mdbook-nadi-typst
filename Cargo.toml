@@ -5,6 +5,10 @@ edition = "2024"
 description = "A mdBook backend to output typst markup"
 
 [dependencies]
-mdbook = "0.4.52"
+mdbook = "0.5.1"
 pulldown-cmark = "0.13.0"
-serde = "1.0.219"
+serde = "1.0.*"
+mdbook-renderer = "0.5.1"
+mdbook-markdown = "0.5.1"
+serde_derive = "1.0.228"
+anyhow = "1.0.100"

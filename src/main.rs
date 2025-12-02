@@ -1,96 +1,26 @@
-use mdbook::book::{BookItem, Chapter};
-use mdbook::renderer::RenderContext;
+use mdbook_renderer::book::{BookItem, Chapter};
+use mdbook_renderer::RenderContext;
 use pulldown_cmark::{Options, Parser};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-fn main() -> std::io::Result<()> {
+mod config;
+
+fn main() -> anyhow::Result<()> {
     let mut stdin = std::io::stdin();
     let ctx = RenderContext::from_json(&mut stdin).unwrap();
+
+    let cfg: config::Config = ctx.config.get("output.typst")?.unwrap_or_default();
 
     let _ = std::fs::create_dir_all(&ctx.destination);
     let book_path = ctx.destination.join("book.typ");
 
     let file = std::fs::File::create(book_path)?;
     let mut writer = std::io::BufWriter::new(file);
-    writeln!(
-        writer,
-        "{}",
-        r#"
-#set document(title: "Network Analysis and Data Integration (NADI) Book")
-#set document(author: ("Gaurav Atreya"))
-#set heading(numbering: "1.", depth: 3)
-#set page(paper: "us-letter")
-#set text(size: 11pt)
-#set text(font: "Noto Sans")
-#set par(spacing:2em, leading: .8em, justify: true)
-#set raw(syntaxes: "typst/task.sublime-syntax")
-#set raw(syntaxes: "typst/signature.sublime-syntax")
-#set raw(syntaxes: "typst/stp.sublime-syntax")
+    writeln!(writer, "{}", cfg.prelude(&ctx.root)?)?;
 
-#show heading: it => [
-    #block(above: 2em, below: 2em, it)
-]
-#show link: it => {
-  if type(it.dest) != str {
-    text(fill:green, it)
-  }
-  else {
-    text(fill:blue, it)
-  }
-}
-#show ref: underline
-#show ref: set text(green)
-#show raw: set block(fill: luma(230), inset: 8pt, radius: 4pt, width: 100%)
-#show outline.entry.where(level: 1):it => {
-                                    v(11pt, weak: true)
-                                   strong(it) 
-                                }
-
-#{
-    set page(fill: gradient.linear(luma(100), luma(200)).sharp(20, smoothness: 40%))
-    set align(center)
-    text(17pt, [Network Analysis and Data Integration (NADI) System])
-    v(2mm)
-    text(17pt, [User Manual])
-
-    {
-        image("cover.png", width:100%)
-    }
-    text(27pt, [NADI Book ])
-    text(17pt, [Version: 0.7.0])
-
-    v(1mm)
-    text(12pt, [Web Version: ] + link("https://nadi-system.github.io/"))
-
-    v(1fr)
-    grid(
-        rows: 0.5cm,
-        columns: 1,
-        [Gaurav Atreya],
-        [2025-06-27]
-    )
-}
-
-#pagebreak()
-#set page(numbering: "i")
-#counter(page).update(1)
-
-#let unum_chap(contents) = align(center, text(size:16pt, contents))
-#let bookpart(contents) = block(fill:luma(200), inset: 8pt, width: 100%, align(center, text(size:16pt, contents)))
-
-#show quote: set block(fill: luma(230), inset: 8pt, radius: 4pt, width: 100%)
-#let htmlblock(cat, contents) = block(fill: yellow, inset: 8pt, radius: 4pt, width: 100%, contents)
-
-#outline(depth: 2, indent: 2em)
-#pagebreak()
-#counter(page).update(1)
-#set page(numbering: "1", header:[#h(1fr) Nadi Book])
-"#
-    )?;
-
-    for section in ctx.book.sections {
+    for section in ctx.book.items {
         write_bookitem(&mut writer, section, 0)?;
     }
 
@@ -171,6 +101,8 @@ fn write_markdown(
 
     let mut table: Option<MdTable> = None;
     let mut list: Option<u64> = None;
+    let mut consec_par = false;
+    let mut in_listitem = false;
     let mut in_code = false;
     let mut in_head = false;
     for event in parser {
@@ -184,12 +116,17 @@ fn write_markdown(
             }
             Event::Text(c) => {
                 let txt = if in_code {
-                    c.lines()
+                    let l = c
+                        .lines()
                         .map(|l| l.trim_start_matches('!'))
-                        .collect::<Vec<&str>>()
-                        .join("\n")
+                        .collect::<Vec<&str>>();
+                    format!("{}\n", l.join("\n"))
                 } else if in_head {
-                    maybe_label(chap_name, c)
+                    let cp = chap_path
+                        .as_ref()
+                        .and_then(|p| p.file_stem())
+                        .map(|f| f.to_string_lossy());
+                    maybe_label(cp.as_ref().map_or(chap_name, |v| &v), c)
                 } else {
                     escape_typst(c)
                 };
@@ -203,8 +140,16 @@ fn write_markdown(
             Event::SoftBreak => write!(writer, "\n")?,
             Event::HardBreak => write!(writer, "\n\n")?,
             // it makes four empty line, but overkill better than incorrect
-            Event::Start(Tag::Paragraph) => write!(writer, "\n\n")?,
-            Event::End(TagEnd::Paragraph) => write!(writer, "\n\n")?,
+            Event::Start(Tag::Paragraph) => {
+                if !(in_listitem | consec_par) {
+                    writeln!(writer, "\n\n")?
+                }
+            }
+            Event::End(TagEnd::Paragraph) => {
+                writeln!(writer, "\n")?;
+                consec_par = true;
+                continue;
+            }
             Event::Start(Tag::Strong) => write!(writer, "*")?,
             Event::End(TagEnd::Strong) => write!(writer, "*")?,
             Event::Start(Tag::Link { dest_url, .. }) => {
@@ -243,9 +188,11 @@ fn write_markdown(
                 } else {
                     write!(writer, "- ")?;
                 }
+                in_listitem = true;
             }
             Event::End(TagEnd::Item) => {
                 writeln!(writer)?;
+                in_listitem = false;
             }
             Event::End(TagEnd::List(_)) => {
                 list = None;
@@ -286,7 +233,11 @@ fn write_markdown(
                         path.join(dest_url.to_string())
                     )?
                 } else {
-                    write!(writer, "\n#figure(image(\"{dest_url}\"), caption: [")?
+                    write!(
+                        writer,
+                        "\n#figure(image({:?}), caption: [",
+                        dest_url.to_string()
+                    )?
                 }
             }
             Event::End(TagEnd::Image) => {
@@ -357,6 +308,7 @@ fn write_markdown(
             // Event::FootnoteReference(r) => write!(writer, "#ft()")?,
             _ => (),
         }
+        consec_par = false;
     }
 
     Ok(())
