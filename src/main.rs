@@ -175,7 +175,7 @@ fn write_markdown(
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code = false;
-                writeln!(writer, "\n``````")?
+                writeln!(writer, "``````")?
             }
             Event::Start(Tag::List(l)) => {
                 writeln!(writer)?;
